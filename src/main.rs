@@ -16,6 +16,7 @@ use sled;
 use bincode;
 use serde::{Serialize, Deserialize};
 use serde_json;
+use form_urlencoded;
 
 
 
@@ -30,6 +31,7 @@ struct SongPostDetails {
     artist: String,
     genre: String,
 }
+#[derive(Serialize, Deserialize)]
 struct Song {
     id: u64,
     title: String,
@@ -83,6 +85,52 @@ async fn handle_request(
 
         },
 
+
+        // If the requst is a GET request to /songs/search with parameters? title, artist, genre, return a list of songs that match the search criteria
+        (&Method::GET, "/songs/search") => {
+            let query = req.uri().query().unwrap();
+            let query_pairs = form_urlencoded::parse(query.as_bytes());
+            let mut title = String::new();
+            let mut artist = String::new();
+            let mut genre = String::new();
+            for (key, value) in query_pairs {
+                match key.as_ref() {
+                    "title" => title = value.to_string(),
+                    "artist" => artist = value.to_string(),
+                    "genre" => genre = value.to_string(),
+                    _ => (),
+                }
+            }
+            println!("\nSearching for: Title: {:?}, Artist: {:?}, Genre: {:?}", title, artist, genre);
+
+            let result: Result<Response<BoxBody<hyper::body::Bytes, hyper::Error>>, sled::transaction::TransactionError> = db.transaction(|db| {
+                let mut songs: Vec<Song> = Vec::new();
+                let mut song_id = u64::from_be_bytes(db.get(b"song_id").unwrap().unwrap().to_vec().try_into().unwrap());
+                while song_id != 0 {
+                    song_id -= 1;
+                    let song_serialized = db.get(format!("song_{}", song_id).as_bytes()).unwrap().expect("Error").to_vec();
+                    let song: Song = bincode::deserialize(song_serialized.as_slice()).unwrap();
+                    if (title.is_empty() || song.title.contains(&title)) && (artist.is_empty() || song.artist.contains(&artist)) && (genre.is_empty() || song.genre.contains(&genre)) {
+                        songs.push(song);
+                    }
+                }
+                println!("Songs found: {:?}", songs.len());
+                for song in &songs {
+                    println!("Song id: {:?} Tile: {:?} Artist: {:?} Genre: {:?} Play count: {:?}", song.id, song.title, song.artist, song.genre, song.play_count);
+                }
+                //create a json body that contains all songs in songs
+                let json_songs = serde_json::to_string(&songs).unwrap();
+//                let serialized_songs = bincode::serialize(&songs).unwrap();
+                Ok(Response::new(full(json_songs)))
+            });
+
+            match result {
+                Ok(response) => Ok(response),
+                Err(_) => Ok(Response::new(full("Search error"))),
+            }
+        },
+
+
         // If the request is a POST request to /songs/new with a JSON body, add a new song to the database
         (&Method::POST, "/songs/new") => {
             let frame_stream = req.into_body().map_frame(move |frame| {
@@ -94,7 +142,6 @@ async fn handle_request(
                         b"song_id", 
                         increment)
                         .unwrap().expect("error").to_vec().try_into().unwrap());
-
                     let song: Song = Song {
                         id: id,
                         title: song_post_details.title,
@@ -102,6 +149,9 @@ async fn handle_request(
                         genre: song_post_details.genre,
                         play_count: 0,
                     };
+
+                    let serialized_song = bincode::serialize(&song).unwrap();
+                    db.insert(format!("song_{}", id).as_bytes(), serialized_song).unwrap();
 
                     println!("\nSong id: {:?}\n Tile: {:?}\n Artist: {:?}\n Genre: {:?}\n Play count: {:?}", song.id, song.title, song.artist, song.genre, song.play_count);
                     data

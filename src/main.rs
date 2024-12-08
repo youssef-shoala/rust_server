@@ -110,7 +110,7 @@ async fn handle_request(
                     song_id -= 1;
                     let song_serialized = db.get(format!("song_{}", song_id).as_bytes()).unwrap().expect("Error").to_vec();
                     let song: Song = bincode::deserialize(song_serialized.as_slice()).unwrap();
-                    if (title.is_empty() || song.title.contains(&title)) && (artist.is_empty() || song.artist.contains(&artist)) && (genre.is_empty() || song.genre.contains(&genre)) {
+                    if (title.is_empty() || song.title.to_lowercase().contains(&title.to_lowercase())) && (artist.is_empty() || song.artist.to_lowercase().contains(&artist.to_lowercase())) && (genre.is_empty() || song.genre.to_lowercase().contains(&genre.to_lowercase())) {
                         songs.push(song);
                     }
                 }

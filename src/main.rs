@@ -31,7 +31,7 @@ struct SongPostDetails {
     artist: String,
     genre: String,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct Song {
     id: u64,
     title: String,
@@ -120,7 +120,7 @@ async fn handle_request(
                 }
                 //create a json body that contains all songs in songs
                 let json_songs = serde_json::to_string(&songs).unwrap();
-//                let serialized_songs = bincode::serialize(&songs).unwrap();
+                //let serialized_songs = bincode::serialize(&songs).unwrap();
                 Ok(Response::new(full(json_songs)))
             });
 
@@ -138,29 +138,49 @@ async fn handle_request(
                     let json_vec = data.to_vec();
                     let json_slice = json_vec.as_slice();
                     let song_post_details: SongPostDetails = serde_json::from_slice(json_slice).unwrap();
-                    let id = u64::from_be_bytes(db.fetch_and_update(
-                        b"song_id", 
-                        increment)
-                        .unwrap().expect("error").to_vec().try_into().unwrap());
-                    let song: Song = Song {
-                        id: id,
-                        title: song_post_details.title,
-                        artist: song_post_details.artist,
-                        genre: song_post_details.genre,
-                        play_count: 0,
+
+                    let result: Result<Song, sled::transaction::TransactionError<sled::Error>> = db.transaction(|db| {
+
+                        let id = u64::from_be_bytes(db.get(b"song_id").unwrap().unwrap().to_vec().try_into().unwrap());
+                        let next_id = id + 1;
+                        db.insert(b"song_id", next_id.to_be_bytes().to_vec()).unwrap();
+
+                        // cloning here could be avoided by using a closure? <-- ai gen but this probs slows it down look at when optimizing performance
+                        let song: Song = Song {
+                            id: id,
+                            title: song_post_details.title.clone(),
+                            artist: song_post_details.artist.clone(),
+                            genre: song_post_details.genre.clone(),
+                            play_count: 0,
+                        };
+                        let serialized_song = bincode::serialize(&song).unwrap();
+                        println!("\nSong id: {:?}\n Tile: {:?}\n Artist: {:?}\n Genre: {:?}\n Play count: {:?}", song.id, song.title, song.artist, song.genre, song.play_count);
+                        db.insert(format!("song_{}", id).as_bytes(), serialized_song).unwrap();
+                        Ok(song)
+
+                    });
+
+                    let response = match result {
+                        Ok(song) => {
+                            //Response::new(full(format!("Added song: {:?}", song)));
+                            println!("Song Added: {:?}", song);
+                            let serialized_song = bincode::serialize(&song).unwrap();
+                            println!("Serialized Song: {:?}", serialized_song);
+                            Bytes::from(serialized_song)
+                        },
+                        Err(_) => {
+                            //Response::new(full("Error adding song"));
+                            Bytes::new()
+                        }
                     };
-
-                    let serialized_song = bincode::serialize(&song).unwrap();
-                    db.insert(format!("song_{}", id).as_bytes(), serialized_song).unwrap();
-
-                    println!("\nSong id: {:?}\n Tile: {:?}\n Artist: {:?}\n Genre: {:?}\n Play count: {:?}", song.id, song.title, song.artist, song.genre, song.play_count);
-                    data
+                    response
                 } else {
-                    Bytes::new()
+                    Bytes::new() 
                 };
+                println!("Frame: {:?}", frame);
                 Frame::data(frame)
             });
-
+//            Ok(Response::new(frame_stream.boxed()))
             Ok(Response::new(frame_stream.boxed()))
         },
 

@@ -24,10 +24,6 @@ struct Count {
     count: u64, 
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Id {
-    id: u64,
-}
 #[derive(Serialize, Deserialize)]
 struct SongPostDetails {
     title: String,
@@ -189,9 +185,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("No count found in database, initializing to 0.");
         let count = Count { count: 0 };
         let serialized_count = bincode::serialize(&count)?;
+        let zero: u64 = 0;
+        let serialized_zero = zero.to_be_bytes().to_vec();
         db.insert(b"count", serialized_count)?;
         println!("No songs found in database, initializing to empty.");
-        db.insert(b"song_id", b"1")?;
+        db.insert(b"song_id", serialized_zero)?;
     }
 
     //println!("Tree names: {:?}", db.tree_names());

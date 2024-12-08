@@ -162,11 +162,9 @@ async fn handle_request(
 
                     let response = match result {
                         Ok(song) => {
-                            //Response::new(full(format!("Added song: {:?}", song)));
                             println!("Song Added: {:?}", song);
-                            let serialized_song = bincode::serialize(&song).unwrap();
-                            println!("Serialized Song: {:?}", serialized_song);
-                            Bytes::from(serialized_song)
+                            let json_songs = serde_json::to_string(&song).unwrap();
+                            Bytes::from(json_songs)
                         },
                         Err(_) => {
                             //Response::new(full("Error adding song"));
@@ -177,10 +175,8 @@ async fn handle_request(
                 } else {
                     Bytes::new() 
                 };
-                println!("Frame: {:?}", frame);
                 Frame::data(frame)
             });
-//            Ok(Response::new(frame_stream.boxed()))
             Ok(Response::new(frame_stream.boxed()))
         },
 

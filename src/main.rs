@@ -15,12 +15,31 @@ use tokio::net::TcpListener;
 use sled;
 use bincode;
 use serde::{Serialize, Deserialize};
+use serde_json;
 
 
 
 #[derive(Serialize, Deserialize)]
 struct Count { 
     count: u64, 
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Id {
+    id: u64,
+}
+#[derive(Serialize, Deserialize)]
+struct SongPostDetails {
+    title: String,
+    artist: String,
+    genre: String,
+}
+struct Song {
+    id: u64,
+    title: String,
+    artist: String,
+    genre: String,
+    play_count: u64,
 }
 
 
@@ -45,7 +64,7 @@ async fn handle_request(
         ))), 
 
 
-        // If the request is a get request to /count, return a count of the number of requests and increment by 1 
+        // If the request is a GET request to /count, return a count of the number of requests and increment by 1 
         (&Method::GET, "/count") => {
 
             let result: Result<Response<BoxBody<hyper::body::Bytes, hyper::Error>>, sled::transaction::TransactionError> = db.transaction(|db| {
@@ -57,17 +76,46 @@ async fn handle_request(
                     db.insert(b"count", serialized_new_count)?;
                     Ok(Response::new(full(format!("Visit count: {}", deserialized_count.count))))
                 } else {
-                    Ok(Response::new(full("Visit count error")))
-                    //let new_count = Count { count: 1 };
+                    Ok(Response::new(full("Visit count not found")))
                 }
             });
 
             match result {
                 Ok(response) => Ok(response),
-                Err(_) => Ok(Response::new(full("Visit count not found"))),
+                Err(_) => Ok(Response::new(full("Visit count error"))),
             }
 
+        },
 
+        // If the request is a POST request to /songs/new with a JSON body, add a new song to the database
+        (&Method::POST, "/songs/new") => {
+            let frame_stream = req.into_body().map_frame(move |frame| {
+                let frame = if let Ok(data) = frame.into_data() {
+                    let json_vec = data.to_vec();
+                    let json_slice = json_vec.as_slice();
+                    let song_post_details: SongPostDetails = serde_json::from_slice(json_slice).unwrap();
+                    let id = u64::from_be_bytes(db.fetch_and_update(
+                        b"song_id", 
+                        increment)
+                        .unwrap().expect("error").to_vec().try_into().unwrap());
+
+                    let song: Song = Song {
+                        id: id,
+                        title: song_post_details.title,
+                        artist: song_post_details.artist,
+                        genre: song_post_details.genre,
+                        play_count: 0,
+                    };
+
+                    println!("\nSong id: {:?}\n Tile: {:?}\n Artist: {:?}\n Genre: {:?}\n Play count: {:?}", song.id, song.title, song.artist, song.genre, song.play_count);
+                    data
+                } else {
+                    Bytes::new()
+                };
+                Frame::data(frame)
+            });
+
+            Ok(Response::new(frame_stream.boxed()))
         },
 
 
@@ -102,6 +150,20 @@ async fn handle_request(
 
 
 
+fn increment(old: Option<&[u8]>) -> Option<Vec<u8>> {
+    let number = match old {
+        Some(bytes) => {
+            let array: [u8; 8] = bytes.try_into().unwrap();
+            let number = u64::from_be_bytes(array);
+            number + 1
+        },
+        None => 0,
+    };
+
+    println!("Incremented number: {:?}", number);
+    Some(number.to_be_bytes().to_vec())
+
+}
 fn empty() -> BoxBody<Bytes, hyper::Error> {
     Empty::<Bytes>::new()
         .map_err(|never| match never{})
@@ -128,6 +190,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let count = Count { count: 0 };
         let serialized_count = bincode::serialize(&count)?;
         db.insert(b"count", serialized_count)?;
+        println!("No songs found in database, initializing to empty.");
+        db.insert(b"song_id", b"1")?;
     }
 
     //println!("Tree names: {:?}", db.tree_names());

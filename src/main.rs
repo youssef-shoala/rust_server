@@ -17,6 +17,7 @@ use bincode;
 use serde::{Serialize, Deserialize};
 use serde_json;
 use form_urlencoded;
+use dashmap::DashMap;
 
 
 
@@ -50,6 +51,7 @@ struct Song {
 async fn handle_request(
     req: Request<hyper::body::Incoming>, 
     db: sled::Db,
+    cache: std::sync::Arc<DashMap<String, Vec<Song>>>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
 
 
@@ -137,24 +139,79 @@ async fn handle_request(
             //println!("\nSearching for: Title: {:?}, Artist: {:?}, Genre: {:?}", title, artist, genre);
 
             // add search cache for performace
+            let cache_key = format!("{}{}{}", title, artist, genre);
+            if let Some(cached_songs) = cache.get(&cache_key) {
+                let songs = cached_songs.value();
+                let json_songs = serde_json::to_string(songs).unwrap();
+                return Ok(Response::new(full(json_songs)));
+            }
 
-            use rayon::prelude::*;
-
-            let keys = (0..u64::from_be_bytes(db.get(b"song_id").unwrap().unwrap().to_vec().try_into().unwrap())).collect::<Vec<u64>>();
-            let songs = keys
-                .par_iter()
-                .filter_map(|song_id| {
-                    let song_serialized = db.get(format!("song_{}", song_id).as_bytes()).unwrap().expect("Error").to_vec();
-                    let song: Song = bincode::deserialize(song_serialized.as_slice()).unwrap();
-                    if (title.is_empty() || song.title.to_lowercase().contains(&title.to_lowercase())) && (artist.is_empty() || song.artist.to_lowercase().contains(&artist.to_lowercase())) && (genre.is_empty() || song.genre.to_lowercase().contains(&genre.to_lowercase())) {
-                        Some(song)
+            let songs = db.iter()
+                .filter_map(|item| {
+                    let (key, value) = item.unwrap();
+                    let key_str = String::from_utf8(key.to_vec()).unwrap();
+                    if key_str.starts_with("song_") {
+                        if (title.is_empty() || key_str.contains(title.as_str())) && (artist.is_empty() || key_str.contains(artist.as_str())) && (genre.is_empty() || key_str.contains(genre.as_str())) {
+                            let song: Song = bincode::deserialize(value.as_ref()).unwrap();
+                            Some(song)
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
                 })
                 .collect::<Vec<Song>>();
             let json_songs = serde_json::to_string(&songs).unwrap();
+            cache.insert(cache_key, songs);
             Ok(Response::new(full(json_songs)))
+
+            //use rayon::prelude::*;
+
+            //for item in db.iter() {
+            //    let (key, value) = item.unwrap();
+            //    let key_str = String::from_utf8(key.to_vec()).unwrap();
+            //    let value_str = String::from_utf8(value.to_vec()).unwrap();
+            //    //println!("Key: {:?} Value: {:?}", key_str, value_str);
+            //}
+
+            //let songs = db.par_iter()
+            //    .filter_map(|item| {
+            //        let (key, value) = item.unwrap();
+            //        let key_str = String::from_utf8(key.to_vec()).unwrap();
+            //        let value_str = String::from_utf8(value.to_vec()).unwrap();
+            //        if key_str.starts_with("song_") {
+            //            let song: Song = bincode::deserialize(value_str.as_bytes()).unwrap();
+            //            if (title.is_empty() || song.title.to_lowercase().contains(&title.to_lowercase())) && (artist.is_empty() || song.artist.to_lowercase().contains(&artist.to_lowercase())) && (genre.is_empty() || song.genre.to_lowercase().contains(&genre.to_lowercase())) {
+            //                Some(song)
+            //            } else {
+            //                None
+            //            }
+            //        } else {
+            //            None
+            //        }
+            //    })
+            //    .collect::<Vec<Song>>();
+            
+
+
+
+
+            //let keys = (0..u64::from_be_bytes(db.get(b"song_id").unwrap().unwrap().to_vec().try_into().unwrap())).collect::<Vec<u64>>();
+            //let songs = keys
+            //    .par_iter()
+            //    .filter_map(|song_id| {
+            //        let song_serialized = db.get(format!("song_{}", song_id).as_bytes()).unwrap().expect("Error").to_vec();
+            //        let song: Song = bincode::deserialize(song_serialized.as_slice()).unwrap();
+            //        if (title.is_empty() || song.title.to_lowercase().contains(&title.to_lowercase())) && (artist.is_empty() || song.artist.to_lowercase().contains(&artist.to_lowercase())) && (genre.is_empty() || song.genre.to_lowercase().contains(&genre.to_lowercase())) {
+            //            Some(song)
+            //        } else {
+            //            None
+            //        }
+            //    })
+            //    .collect::<Vec<Song>>();
+            //let json_songs = serde_json::to_string(&songs).unwrap();
+            //Ok(Response::new(full(json_songs)))
 
 
 
@@ -226,8 +283,9 @@ async fn handle_request(
                             play_count: 0,
                         };
                         let serialized_song = bincode::serialize(&song).unwrap();
+                        let full_id = format!("song_{}_{}_{}_{}_{}", id, song.title, song.artist, song.genre, song.play_count);
                         //println!("\nSong id: {:?}\n Tile: {:?}\n Artist: {:?}\n Genre: {:?}\n Play count: {:?}", song.id, song.title, song.artist, song.genre, song.play_count);
-                        db.insert(format!("song_{}", id).as_bytes(), serialized_song).unwrap();
+                        db.insert(full_id.as_bytes(), serialized_song).unwrap();
                         Ok(song)
 
                     });
@@ -322,6 +380,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let serialized_zero = zero.to_be_bytes().to_vec();
     db.insert(b"count", serialized_count)?;
 
+    let cache: std::sync::Arc<DashMap<String, Vec<Song>>> = std::sync::Arc::new(DashMap::new());
+
     if !db.was_recovered() {
         println!("Database was not recovered correctly, initializing to empty.");
         db.insert(b"song_id", serialized_zero)?;
@@ -346,11 +406,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         // Spawn a tokio task to serve multiple connections concurrently
         let db_clone = db.clone();
+        let cache = cache.clone();
         tokio::task::spawn(async move {
             // Finally, we bind the incoming connection to our service
             if let Err(err) = http1::Builder::new()
                 // `service_fn` converts our function in a `Service`
-                .serve_connection(io, service_fn(move |req| handle_request(req, db_clone.clone())))
+                .serve_connection(io, service_fn(move |req| handle_request(req, db_clone.clone(), cache.clone())))
                 .await
             {
                 eprintln!("Error serving connection: {:?}", err);

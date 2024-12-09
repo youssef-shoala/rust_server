@@ -20,12 +20,12 @@ use form_urlencoded;
 
 
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct Count { 
     count: u64, 
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct SongPostDetails {
     title: String,
     artist: String,
@@ -65,24 +65,57 @@ async fn handle_request(
         // If the request is a GET request to /count, return a count of the number of requests and increment by 1 
         (&Method::GET, "/count") => {
 
-            let result: Result<Response<BoxBody<hyper::body::Bytes, hyper::Error>>, sled::transaction::TransactionError> = db.transaction(|db| {
-                if let Some(count) = db.get(b"count")? {
-                    let count_byte_slice = count.as_ref();
-                    let deserialized_count: Count = bincode::deserialize(count_byte_slice).unwrap();
-                    let new_count = Count { count: deserialized_count.count + 1 };
-                    let serialized_new_count = bincode::serialize(&new_count).unwrap();
-                    db.insert(b"count", serialized_new_count)?;
-                    Ok(Response::new(full(format!("Visit count: {}", deserialized_count.count))))
-                } else {
-                    Ok(Response::new(full("Visit count not found")))
+//            let result: Result<Response<BoxBody<hyper::body::Bytes, hyper::Error>>, sled::transaction::TransactionError> = db.transaction(|db| {
+//                if let Some(count) = db.get(b"count")? {
+//                    let count_byte_slice = count.as_ref();
+//                    let deserialized_count: Count = bincode::deserialize(count_byte_slice).unwrap();
+//                    let new_count = Count { count: deserialized_count.count + 1 };
+//                    let serialized_new_count = bincode::serialize(&new_count).unwrap();
+//                    db.insert(b"count", serialized_new_count)?;
+//                    Ok(Response::new(full(format!("Visit count: {}", deserialized_count.count))))
+//                } else {
+//                    Ok(Response::new(full("Visit count not found")))
+//                }
+//            });
+//
+//            match result {
+//                Ok(response) => Ok(response),
+//                Err(_) => Ok(Response::new(full("Visit count error"))),
+//            }
+
+            let count = db.fetch_and_update(b"count", increment).unwrap().map(|iv| iv.to_vec()).unwrap();
+            let deserialized_count = u64::from_be_bytes(count.as_slice().try_into().unwrap());
+            Ok(Response::new(full(format!("Visit count: {:?}", deserialized_count))))
+
+        },
+
+    
+        // If the request is a GET requst to /songs/play/{song_id} increment the play count and return the updated json body
+        (&Method::GET, path) if path.starts_with("/songs/play/") => {
+            let song_id_str = path.trim_start_matches("/songs/play/");
+            if let Ok(song_id) = song_id_str.parse::<u64>() {
+                let result: Result<Response<BoxBody<hyper::body::Bytes, hyper::Error>>, sled::transaction::TransactionError> = db.transaction(|db| {
+                    if let Some(song_serialized) = db.get(format!("song_{}", song_id).as_bytes())? {
+                        let mut song: Song = bincode::deserialize(&song_serialized).unwrap();
+                        song.play_count += 1;
+                        let serialized_song = bincode::serialize(&song).unwrap();
+                        db.insert(format!("song_{}", song_id).as_bytes(), serialized_song)?;
+                        let json_song = serde_json::to_string(&song).unwrap();
+                        Ok(Response::new(full(json_song)))
+                    } else {
+                        let error_response = serde_json::json!({ "error": "Song not found" });
+                        Ok(Response::new(full(error_response.to_string())))
+                    }
+                });
+
+                match result {
+                    Ok(response) => Ok(response),
+                    Err(_) => Ok(Response::new(full("Error incrementing play count"))),
                 }
-            });
-
-            match result {
-                Ok(response) => Ok(response),
-                Err(_) => Ok(Response::new(full("Visit count error"))),
+            } else {
+                let error_response = serde_json::json!({ "error": "Invalid song ID" });
+                Ok(Response::new(full(error_response.to_string())))
             }
-
         },
 
 
@@ -101,33 +134,73 @@ async fn handle_request(
                     _ => (),
                 }
             }
-            println!("\nSearching for: Title: {:?}, Artist: {:?}, Genre: {:?}", title, artist, genre);
+            //println!("\nSearching for: Title: {:?}, Artist: {:?}, Genre: {:?}", title, artist, genre);
 
-            let result: Result<Response<BoxBody<hyper::body::Bytes, hyper::Error>>, sled::transaction::TransactionError> = db.transaction(|db| {
-                let mut songs: Vec<Song> = Vec::new();
-                let mut song_id = u64::from_be_bytes(db.get(b"song_id").unwrap().unwrap().to_vec().try_into().unwrap());
-                while song_id != 0 {
-                    song_id -= 1;
+            // add search cache for performace
+
+            use rayon::prelude::*;
+
+            let keys = (0..u64::from_be_bytes(db.get(b"song_id").unwrap().unwrap().to_vec().try_into().unwrap())).collect::<Vec<u64>>();
+            let songs = keys
+                .par_iter()
+                .filter_map(|song_id| {
                     let song_serialized = db.get(format!("song_{}", song_id).as_bytes()).unwrap().expect("Error").to_vec();
                     let song: Song = bincode::deserialize(song_serialized.as_slice()).unwrap();
                     if (title.is_empty() || song.title.to_lowercase().contains(&title.to_lowercase())) && (artist.is_empty() || song.artist.to_lowercase().contains(&artist.to_lowercase())) && (genre.is_empty() || song.genre.to_lowercase().contains(&genre.to_lowercase())) {
-                        songs.push(song);
+                        Some(song)
+                    } else {
+                        None
                     }
-                }
-                println!("Songs found: {:?}", songs.len());
-                for song in &songs {
-                    println!("Song id: {:?} Tile: {:?} Artist: {:?} Genre: {:?} Play count: {:?}", song.id, song.title, song.artist, song.genre, song.play_count);
-                }
-                //create a json body that contains all songs in songs
-                let json_songs = serde_json::to_string(&songs).unwrap();
-                //let serialized_songs = bincode::serialize(&songs).unwrap();
-                Ok(Response::new(full(json_songs)))
-            });
+                })
+                .collect::<Vec<Song>>();
+            let json_songs = serde_json::to_string(&songs).unwrap();
+            Ok(Response::new(full(json_songs)))
 
-            match result {
-                Ok(response) => Ok(response),
-                Err(_) => Ok(Response::new(full("Search error"))),
-            }
+
+
+            //let result: Result<Response<BoxBody<hyper::body::Bytes, hyper::Error>>, sled::transaction::TransactionError> = db.transaction(|db| {
+            //    let mut songs: Vec<Song> = Vec::new();
+            //    let mut song_id = u64::from_be_bytes(db.get(b"song_id").unwrap().unwrap().to_vec().try_into().unwrap());
+            //    while song_id != 0 {
+            //        song_id -= 1;
+            //        let song_serialized = db.get(format!("song_{}", song_id).as_bytes()).unwrap().expect("Error").to_vec();
+            //        let song: Song = bincode::deserialize(song_serialized.as_slice()).unwrap();
+            //        if (title.is_empty() || song.title.to_lowercase().contains(&title.to_lowercase())) && (artist.is_empty() || song.artist.to_lowercase().contains(&artist.to_lowercase())) && (genre.is_empty() || song.genre.to_lowercase().contains(&genre.to_lowercase())) {
+            //            songs.push(song);
+            //        }
+            //    }
+
+            //    //println!("Songs found: {:?}", songs.len());
+            //    //for song in &songs {
+            //    //    println!("Song id: {:?} Tile: {:?} Artist: {:?} Genre: {:?} Play count: {:?}", song.id, song.title, song.artist, song.genre, song.play_count);
+            //    //}
+
+            //    //create a json body that contains all songs in songs
+            //    let json_songs = serde_json::to_string(&songs).unwrap();
+            //    //let serialized_songs = bincode::serialize(&songs).unwrap();
+            //    Ok(Response::new(full(json_songs)))
+            //});
+
+            //match result {
+            //    Ok(response) => Ok(response),
+            //    Err(_) => Ok(Response::new(full("Search error"))),
+            //}
+
+
+
+            //let mut songs: Vec<Song> = Vec::new();
+            //let mut song_id = u64::from_be_bytes(db.get(b"song_id").unwrap().unwrap().to_vec().try_into().unwrap());
+            //while song_id != 0 {
+            //    song_id -= 1;
+            //    let song_serialized = db.get(format!("song_{}", song_id).as_bytes()).unwrap().expect("Error").to_vec();
+            //    let song: Song = bincode::deserialize(song_serialized.as_slice()).unwrap();
+            //    if (title.is_empty() || song.title.to_lowercase().contains(&title.to_lowercase())) && (artist.is_empty() || song.artist.to_lowercase().contains(&artist.to_lowercase())) && (genre.is_empty() || song.genre.to_lowercase().contains(&genre.to_lowercase())) {
+            //        songs.push(song);
+            //    }
+            //}
+            //let json_songs = serde_json::to_string(&songs).unwrap();
+            //Ok(Response::new(full(json_songs)))
+
         },
 
 
@@ -145,7 +218,6 @@ async fn handle_request(
                         let next_id = id + 1;
                         db.insert(b"song_id", next_id.to_be_bytes().to_vec()).unwrap();
 
-                        // cloning here could be avoided by using a closure? <-- ai gen but this probs slows it down look at when optimizing performance
                         let song: Song = Song {
                             id: id,
                             title: song_post_details.title.clone(),
@@ -154,7 +226,7 @@ async fn handle_request(
                             play_count: 0,
                         };
                         let serialized_song = bincode::serialize(&song).unwrap();
-                        println!("\nSong id: {:?}\n Tile: {:?}\n Artist: {:?}\n Genre: {:?}\n Play count: {:?}", song.id, song.title, song.artist, song.genre, song.play_count);
+                        //println!("\nSong id: {:?}\n Tile: {:?}\n Artist: {:?}\n Genre: {:?}\n Play count: {:?}", song.id, song.title, song.artist, song.genre, song.play_count);
                         db.insert(format!("song_{}", id).as_bytes(), serialized_song).unwrap();
                         Ok(song)
 
@@ -162,12 +234,11 @@ async fn handle_request(
 
                     let response = match result {
                         Ok(song) => {
-                            println!("Song Added: {:?}", song);
+                            //println!("Song Added: {:?}", song);
                             let json_songs = serde_json::to_string(&song).unwrap();
                             Bytes::from(json_songs)
                         },
                         Err(_) => {
-                            //Response::new(full("Error adding song"));
                             Bytes::new()
                         }
                     };
@@ -181,24 +252,24 @@ async fn handle_request(
         },
 
 
-        // If the request is a POST request to /echo/uppercase, convert the body to uppercase
-        (&Method::POST, "/echo/uppercase") => {
-            // Map this body's frame to a different type
-            let frame_stream = req.into_body().map_frame(|frame| {
-                let frame = if let Ok(data) = frame.into_data() {
-                    // Convert every byte in every Data frame to uppercase
-                    data.iter()
-                        .map(|byte| byte.to_ascii_uppercase())
-                        .collect::<Bytes>()
-                } else {
-                    Bytes::new()
-                };
-
-                Frame::data(frame)
-            });
-
-            Ok(Response::new(frame_stream.boxed()))
-        },
+//        // If the request is a POST request to /echo/uppercase, convert the body to uppercase
+//        (&Method::POST, "/echo/uppercase") => {
+//            // Map this body's frame to a different type
+//            let frame_stream = req.into_body().map_frame(|frame| {
+//                let frame = if let Ok(data) = frame.into_data() {
+//                    // Convert every byte in every Data frame to uppercase
+//                    data.iter()
+//                        .map(|byte| byte.to_ascii_uppercase())
+//                        .collect::<Bytes>()
+//                } else {
+//                    Bytes::new()
+//                };
+//
+//                Frame::data(frame)
+//            });
+//
+//            Ok(Response::new(frame_stream.boxed()))
+//        },
 
 
         // If the request is not a valid request, return a 404 Not Found
@@ -215,16 +286,13 @@ async fn handle_request(
 fn increment(old: Option<&[u8]>) -> Option<Vec<u8>> {
     let number = match old {
         Some(bytes) => {
-            let array: [u8; 8] = bytes.try_into().unwrap();
+            let array: [u8; 8] = bytes.to_vec().try_into().unwrap();
             let number = u64::from_be_bytes(array);
             number + 1
         },
         None => 0,
     };
-
-    println!("Incremented number: {:?}", number);
     Some(number.to_be_bytes().to_vec())
-
 }
 fn empty() -> BoxBody<Bytes, hyper::Error> {
     Empty::<Bytes>::new()
@@ -247,14 +315,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let db = sled::open(db_path)?;
 
+    println!("Initializing count to 0.");
+    let count = Count { count: 0 };
+    let serialized_count = bincode::serialize(&count)?;
+    let zero: u64 = 0;
+    let serialized_zero = zero.to_be_bytes().to_vec();
+    db.insert(b"count", serialized_count)?;
+
     if !db.was_recovered() {
-        println!("No count found in database, initializing to 0.");
-        let count = Count { count: 0 };
-        let serialized_count = bincode::serialize(&count)?;
-        let zero: u64 = 0;
-        let serialized_zero = zero.to_be_bytes().to_vec();
-        db.insert(b"count", serialized_count)?;
-        println!("No songs found in database, initializing to empty.");
+        println!("Database was not recovered correctly, initializing to empty.");
         db.insert(b"song_id", serialized_zero)?;
     }
 

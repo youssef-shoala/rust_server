@@ -43,10 +43,6 @@ struct Song {
 
 
 
-//async fn hello(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
-//    Ok(Response::new(Full::new(Bytes::from("Welcome to the Rust-powered web server!"))))
-//}
-
 // Define the routes and the response for each route
 async fn handle_request(
     req: Request<hyper::body::Incoming>, 
@@ -66,25 +62,6 @@ async fn handle_request(
 
         // If the request is a GET request to /count, return a count of the number of requests and increment by 1 
         (&Method::GET, "/count") => {
-
-//            let result: Result<Response<BoxBody<hyper::body::Bytes, hyper::Error>>, sled::transaction::TransactionError> = db.transaction(|db| {
-//                if let Some(count) = db.get(b"count")? {
-//                    let count_byte_slice = count.as_ref();
-//                    let deserialized_count: Count = bincode::deserialize(count_byte_slice).unwrap();
-//                    let new_count = Count { count: deserialized_count.count + 1 };
-//                    let serialized_new_count = bincode::serialize(&new_count).unwrap();
-//                    db.insert(b"count", serialized_new_count)?;
-//                    Ok(Response::new(full(format!("Visit count: {}", deserialized_count.count))))
-//                } else {
-//                    Ok(Response::new(full("Visit count not found")))
-//                }
-//            });
-//
-//            match result {
-//                Ok(response) => Ok(response),
-//                Err(_) => Ok(Response::new(full("Visit count error"))),
-//            }
-
             let count = db.fetch_and_update(b"count", increment).unwrap().map(|iv| iv.to_vec()).unwrap();
             let deserialized_count = u64::from_be_bytes(count.as_slice().try_into().unwrap());
             Ok(Response::new(full(format!("Visit count: {:?}", deserialized_count + 1))))
@@ -136,12 +113,6 @@ async fn handle_request(
                     _ => (),
                 }
             }
-            //let title_vec = title.clone().as_bytes().to_vec();
-            //let artist_vec = artist.clone().as_bytes().to_vec();
-            //let genre_vec = genre.clone().as_bytes().to_vec();
-            //println!("\nSearching for: Title: {:?}, Artist: {:?}, Genre: {:?}", title, artist, genre);
-            //println!("\nSearching for: Title: {:?}, Artist: {:?}, Genre: {:?}", title_vec, artist_vec, genre_vec);
-
             // add search cache for performace
             let cache_key = format!("{}{}{}", title, artist, genre);
             if let Some(cached_songs) = cache.get(&cache_key) {
@@ -150,132 +121,8 @@ async fn handle_request(
                 return Ok(Response::new(full(json_songs)));
             }
 
-//            //change such that it searches by value not key
-//            //could make it so that the bytes of the search term are directldy compared to bytes in db
-//            let songs_vec = db.iter()
-//                .filter_map(|item| {
-//                    let (key, value) = item.unwrap();
-//                    println!("\nKey: {:?} Value: {:?}\n", key, value);
-//
-//                    let haystack = value;
-//                    //split the haystack into fragments that represent the song id, title, artist, genre, and play count
-//                    let haystacks = [haystack];
-//                    let needles = [&title_vec, &artist_vec, &genre_vec];
-//
-//                    for haystack in haystacks {
-//                        let lowercase_haystack = bytes_to_lowercase(haystack.to_vec().as_slice());
-//                        for needle in needles {
-//                            if needle.is_empty() {
-//                                continue;
-//                            }
-//                            let lowercase_needle = bytes_to_lowercase(needle);
-//                            println!("Needle: {:?}", needle);
-//                            let curr_needle = lowercase_needle.as_slice();
-//                            if lowercase_haystack.windows(curr_needle.len()).any(|window| window == curr_needle) {
-//                                println!("Found needle: {:?}", curr_needle);
-//                                return Some(haystack.to_vec());
-//                            }
-//                        }
-//                           
-//                    }
-//
-//                    None
-//
-//                    //let key_str = String::from_utf8(key.to_vec()).unwrap();
-//                    //if key_str.starts_with("song_") {
-//                    //    if (title.is_empty() || key_str.contains(title.as_str())) && (artist.is_empty() || key_str.contains(artist.as_str())) && (genre.is_empty() || key_str.contains(genre.as_str())) {
-//                    //        let song: Song = bincode::deserialize(value.as_ref()).unwrap();
-//                    //        Some(song)
-//                    //    } else {
-//                    //        None
-//                    //    }
-//                    //} else {
-//                    //    None
-//                    //}
-//                })
-//                .collect::<Vec<Vec<u8>>>();
-
-
-//            let songs = db.iter()
-//                .filter_map(|item| {
-//                    let (key, value) = item.unwrap();
-//                    let key_str = String::from_utf8(key.to_vec()).unwrap();
-//                    let value_str = String::from_utf8(value.to_vec()).unwrap();
-//                    if key_str.starts_with("song_") {
-//                        let song: Song = bincode::deserialize(value_str.as_bytes()).unwrap();
-//                        if (title.is_empty() || song.title.to_lowercase().contains(&title.to_lowercase())) && (artist.is_empty() || song.artist.to_lowercase().contains(&artist.to_lowercase())) && (genre.is_empty() || song.genre.to_lowercase().contains(&genre.to_lowercase())) {
-//                            Some(song)
-//                        } else {
-//                            None
-//                        }
-//                    } else {
-//                        None
-//                    }
-//                })
-//                .collect::<Vec<Song>>();
-//
-//            let json_songs = serde_json::to_string(&songs).unwrap();
-//            println!("Converted JSON: {:?}", json_songs);
-//            cache.insert(cache_key, songs);
-//            println!("Cache size: {:?}", cache.len());
-//            Ok(Response::new(full(json_songs)))
-
-            
-
-
-
-
-            //let keys = (0..u64::from_be_bytes(db.get(b"song_id").unwrap().unwrap().to_vec().try_into().unwrap())).collect::<Vec<u64>>();
-            //let songs = keys
-            //    .par_iter()
-            //    .filter_map(|song_id| {
-            //        let song_serialized = db.get(format!("song_{}", song_id).as_bytes()).unwrap().expect("Error").to_vec();
-            //        let song: Song = bincode::deserialize(song_serialized.as_slice()).unwrap();
-            //        if (title.is_empty() || song.title.to_lowercase().contains(&title.to_lowercase())) && (artist.is_empty() || song.artist.to_lowercase().contains(&artist.to_lowercase())) && (genre.is_empty() || song.genre.to_lowercase().contains(&genre.to_lowercase())) {
-            //            Some(song)
-            //        } else {
-            //            None
-            //        }
-            //    })
-            //    .collect::<Vec<Song>>();
-            //let json_songs = serde_json::to_string(&songs).unwrap();
-            //Ok(Response::new(full(json_songs)))
-
-
-
-            //let result: Result<Response<BoxBody<hyper::body::Bytes, hyper::Error>>, sled::transaction::TransactionError> = db.transaction(|db| {
-            //    let mut songs: Vec<Song> = Vec::new();
-            //    let mut song_id = u64::from_be_bytes(db.get(b"song_id").unwrap().unwrap().to_vec().try_into().unwrap());
-            //    while song_id != 0 {
-            //        song_id -= 1;
-            //        let song_serialized = db.get(format!("song_{}", song_id).as_bytes()).unwrap().expect("Error").to_vec();
-            //        let song: Song = bincode::deserialize(song_serialized.as_slice()).unwrap();
-            //        if (title.is_empty() || song.title.to_lowercase().contains(&title.to_lowercase())) && (artist.is_empty() || song.artist.to_lowercase().contains(&artist.to_lowercase())) && (genre.is_empty() || song.genre.to_lowercase().contains(&genre.to_lowercase())) {
-            //            songs.push(song);
-            //        }
-            //    }
-
-            //    //println!("Songs found: {:?}", songs.len());
-            //    //for song in &songs {
-            //    //    println!("Song id: {:?} Tile: {:?} Artist: {:?} Genre: {:?} Play count: {:?}", song.id, song.title, song.artist, song.genre, song.play_count);
-            //    //}
-
-            //    //create a json body that contains all songs in songs
-            //    let json_songs = serde_json::to_string(&songs).unwrap();
-            //    //let serialized_songs = bincode::serialize(&songs).unwrap();
-            //    Ok(Response::new(full(json_songs)))
-            //});
-
-            //match result {
-            //    Ok(response) => Ok(response),
-            //    Err(_) => Ok(Response::new(full("Search error"))),
-            //}
-
-
-
             let mut songs: Vec<Song> = Vec::new();
             let mut song_id = u64::from_be_bytes(db.get(b"song_id").unwrap().unwrap().to_vec().try_into().unwrap());
-            println!("Song id: {:?}", song_id);
             while song_id != 0 {
                 let song_full_id = format!("song_{}", song_id);
                 let song_serialized = db.get(song_full_id.as_bytes()).unwrap().expect("Error").to_vec();
@@ -313,9 +160,7 @@ async fn handle_request(
                             play_count: 0,
                         };
                         let serialized_song = bincode::serialize(&song).unwrap();
-                        //let full_id = format!("song_{}_{}_{}_{}_{}", next_id, song.title, song.artist, song.genre, song.play_count);
                         let full_id = format!("song_{}", next_id);
-                        //println!("\nSong id: {:?}\n Tile: {:?}\n Artist: {:?}\n Genre: {:?}\n Play count: {:?}", song.id, song.title, song.artist, song.genre, song.play_count);
                         db.insert(full_id.as_bytes(), serialized_song).unwrap();
                         Ok(song)
 
@@ -323,7 +168,6 @@ async fn handle_request(
 
                     let response = match result {
                         Ok(song) => {
-                            //println!("Song Added: {:?}", song);
                             let json_songs = serde_json::to_string(&song).unwrap();
                             Bytes::from(json_songs)
                         },
@@ -351,10 +195,6 @@ async fn handle_request(
 }
 
 
-
-//fn bytes_to_lowercase(bytes: &[u8]) -> Vec<u8> {
-//    bytes.iter().map(|byte| byte.to_ascii_lowercase()).collect::<Vec<u8>>()
-//}
 fn increment(old: Option<&[u8]>) -> Option<Vec<u8>> {
     let number = match old {
         Some(bytes) => {
@@ -387,7 +227,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let db = sled::open(db_path)?;
 
-    println!("Initializing count to 0.");
     let count = Count { count: 0 };
     let serialized_count = bincode::serialize(&count)?;
     let zero: u64 = 0;
@@ -397,17 +236,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cache: std::sync::Arc<DashMap<String, Vec<Song>>> = std::sync::Arc::new(DashMap::new());
 
     if !db.was_recovered() {
-        println!("Database was not recovered correctly, initializing to empty.");
         db.insert(b"song_id", serialized_zero)?;
     }
-
-    //println!("Tree names: {:?}", db.tree_names());
-    //println!("Tree names: {:?}", db.tree_names().iter().map(|name| String::from_utf8(name.to_vec()).unwrap()).collect::<Vec<_>>());
-    //println!("Size on disk: {:?}", db.size_on_disk());
-    //println!("Size on disk: {:?}", db.size_on_disk().iter().map(|(name, size)| (String::from_utf8(name.to_vec()).unwrap(), size)).collect::<Vec<_>>());
-    //println!("Count on server start: {:?}", db.get(b"count").unwrap().unwrap().to_vec().iter()); 
-
-
 
     // Set server listening on localhost:8080
     let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
